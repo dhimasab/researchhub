@@ -20,6 +20,15 @@ SHEET_TAB_NAME = os.getenv("SHEET_TAB_NAME", "Research")
 
 source_configs = {}
 
+def clean_source_name(name):
+    name = str(name).strip()
+    if not name: return ""
+    if "t.me/" in name:
+        name = name.split("t.me/")[-1].replace("/", "")
+    if not name.startswith('@') and not name.replace('-', '').isdigit():
+        name = f"@{name}"
+    return name
+
 def get_config_from_sheet():
     try:
         creds_info = json.loads(base64.b64decode(GOOGLE_CREDS_BASE64).decode("utf-8"))
@@ -33,7 +42,7 @@ def get_config_from_sheet():
         
         new_config = {}
         for row in records:
-            source = str(row.get("Source Channel", "")).strip()
+            source = clean_source_name(row.get("Source Channel", ""))
             target = str(row.get("Target Group ID", "")).strip()
             topic_id = str(row.get("Topic ID", "")).strip()
             status = str(row.get("Status", "")).strip().lower()
@@ -53,76 +62,51 @@ def get_config_from_sheet():
 
 async def main():
     global source_configs
-    
     try:
         decoded_session = base64.b64decode(SESSION_STR).decode('utf-8')
     except:
         print("✖ [ERROR] Gagal decode Session Base64", flush=True)
         return
 
-    # Inisialisasi Akun User
     client = TelegramClient(StringSession(decoded_session), API_ID, API_HASH)
-    
-    print("📡 [DEBUG] Mencoba login ke Akun Telegram...", flush=True)
     await client.start()
-    me = await client.get_me()
-    print(f"✅ [DEBUG] Berhasil login sebagai User: {me.first_name} (@{me.username or 'NoUsername'})", flush=True)
+    print(f"✅ [DEBUG] Akun User Terhubung.", flush=True)
 
     async def update_sources():
         global source_configs
         while True:
-            print("\n🔄 [DEBUG] Menyinkronkan daftar channel dari Google Sheet...", flush=True)
             source_configs = get_config_from_sheet()
-            print(f"📊 [DEBUG] Memantau {len(source_configs)} sumber aktif.", flush=True)
-            
-            # Debug log untuk memastikan apa yang dipantau
-            for s in source_configs.keys():
-                print(f"   🔎 Memantau source: {s}", flush=True)
-                
-            await asyncio.sleep(600) # Cek sheet tiap 10 menit
+            print(f"📊 [DEBUG] Sinkronisasi: {len(source_configs)} sumber aktif.", flush=True)
+            await asyncio.sleep(600)
 
     asyncio.create_task(update_sources())
 
-    # Listener untuk mendeteksi pesan baru
     @client.on(events.NewMessage())
     async def handler(event):
         chat = await event.get_chat()
         chat_id = str(event.chat_id)
-        chat_title = getattr(chat, 'title', 'Chat Pribadi')
         username = f"@{chat.username}" if getattr(chat, 'username', None) else None
         
-        # LOG INI PENTING: Untuk membuktikan akun Anda "mendengar" pesan
-        print(f"\n📩 [LOG] Ada pesan masuk di: {chat_title} (ID: {chat_id} | Username: {username})", flush=True)
-        
-        # Cari kecocokan rute
-        chat_link = f"https://t.me/{chat.username}" if username else ""
-        
         targets = None
-        # Coba cocokkan dengan Username, ID, atau Link yang ada di Sheet
-        for key in [username, chat_id, chat_link]:
+        for key in [username, chat_id]:
             if key and key in source_configs:
                 targets = source_configs[key]
-                print(f"   🎯 [MATCH] Rute ditemukan untuk {key}!", flush=True)
+                print(f"📩 [MATCH] Pesan dari {key} -> Meneruskan...", flush=True)
                 break
         
         if targets:
             for t_config in targets:
                 try:
-                    print(f"   📤 [SENDING] Meneruskan ke Target ID: {t_config['target']}...", flush=True)
-                    # Menggunakan forward_messages (Akun User punya limitasi, tapi forward biasanya aman)
+                    # PERBAIKAN: Menggunakan reply_to untuk Topic ID
                     await client.forward_messages(
                         t_config['target'],
                         event.message,
-                        top_msg_id=t_config['topic']
+                        reply_to=t_config['topic']
                     )
-                    print(f"   ✅ [SUCCESS] Berhasil diteruskan!", flush=True)
+                    print(f"✅ [SUCCESS] Forward berhasil ke Topic {t_config['topic']}", flush=True)
                 except Exception as e:
-                    print(f"   ✖ [ERROR] Gagal meneruskan: {e}", flush=True)
-        else:
-            # Jika pesan masuk tapi tidak ada di list
-            print(f"   ℹ [SKIP] Pesan diabaikan karena source tidak terdaftar atau nonaktif di Sheet.", flush=True)
+                    print(f"✖ [ERROR] Gagal: {e}", flush=True)
 
-    print("🟢 Akun aktif dan sedang memantau pesan... Silakan kirim pesan tes di channel sumber.", flush=True)
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
