@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  bot-forwarder:
+    build: .
+    container_name: tele-forwarder-v2
+    restart: always
+    environment:
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - TELEGRAM_SESSION_BASE64=${TELEGRAM_SESSION_BASE64}
+      - GOOGLE_CREDENTIALS_BASE64=${GOOGLE_CREDENTIALS_BASE64}
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
+      - SHEET_TAB_NAME=${SHEET_TAB_NAME}
+      - PYTHONUNBUFFERED=1
