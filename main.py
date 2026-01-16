@@ -11,6 +11,7 @@ from telethon.sessions import StringSession
 # Load environment variables
 load_dotenv()
 
+# Konfigurasi Utama
 API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 SESSION_STR = os.getenv("TELEGRAM_SESSION_BASE64")
@@ -32,7 +33,7 @@ def clean_source_name(name):
     return name
 
 def get_config_from_sheet():
-    """Mengambil data rute forward dari Google Sheet tab Research"""
+    """Mengambil data rute forward dari Google Sheet"""
     try:
         # Decode Credentials Google
         creds_info = json.loads(base64.b64decode(GOOGLE_CREDS_BASE64).decode("utf-8"))
@@ -44,7 +45,7 @@ def get_config_from_sheet():
         sheet_full = client_gs.open_by_key(SHEET_ID)
         sheet = sheet_full.worksheet(SHEET_TAB_NAME)
         
-        # Ambil record dengan header spesifik
+        # Ambil record dengan header spesifik untuk menghindari kolom hantu
         records = sheet.get_all_records(expected_headers=['Source Channel', 'Target Group ID', 'Topic ID', 'Status'])
         
         new_config = {}
@@ -77,14 +78,14 @@ async def main():
         print(f"✖ [ERROR] Gagal decode Session: {e}", flush=True)
         return
 
-    # Inisialisasi Client
+    # Inisialisasi Client (User Account)
     client = TelegramClient(StringSession(decoded_session), API_ID, API_HASH)
     await client.start()
     me = await client.get_me()
     print(f"✅ [DEBUG] Akun {me.first_name} (@{me.username}) Berhasil Terhubung.", flush=True)
 
     async def update_sources():
-        """Looping sinkronisasi Google Sheet tiap 10 menit"""
+        """Background task untuk sinkronisasi Google Sheet tiap 10 menit"""
         global source_configs
         while True:
             print("\n🔄 [DEBUG] Sinkronisasi Google Sheet...", flush=True)
@@ -100,7 +101,7 @@ async def main():
         chat_id = str(event.chat_id)
         username = f"@{chat.username}" if getattr(chat, 'username', None) else None
         
-        # Cari kecocokan rute
+        # Cari kecocokan rute di config
         targets = None
         for key in [username, chat_id]:
             if key and key in source_configs:
@@ -111,14 +112,15 @@ async def main():
         if targets:
             for t_config in targets:
                 try:
-                    # forward_messages: Meneruskan pesan utuh (Caption + Forwarded Tag)
-                    # comment_to: Mengarahkan pesan ke Topic ID yang spesifik
-                    await client.forward_messages(
+                    # Menggunakan send_message dengan file=event.message
+                    # Ini cara paling stabil untuk forward ke TOPIC (reply_to)
+                    # sekaligus menjaga caption tetap utuh.
+                    await client.send_message(
                         t_config['target'],
-                        event.message,
-                        comment_to=t_config['topic'] if t_config['topic'] else None
+                        file=event.message,
+                        reply_to=t_config['topic'] if t_config['topic'] else None
                     )
-                    print(f"✅ [SUCCESS] Forwarded ke Topic {t_config['topic']}", flush=True)
+                    print(f"✅ [SUCCESS] Berhasil dikirim ke Topic {t_config['topic']}", flush=True)
                 except Exception as e:
                     print(f"✖ [ERROR] Gagal meneruskan ke {t_config['target']}: {e}", flush=True)
 
