@@ -1,0 +1,4 @@
+telethon
+gspread
+google-auth
+python-dotenv
