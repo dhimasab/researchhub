@@ -36,14 +36,16 @@ def get_config_from_sheet():
         # Buka Sheet dan Tab
         sheet_full = client_gs.open_by_key(SHEET_ID)
         sheet = sheet_full.worksheet(SHEET_TAB_NAME)
-        records = sheet.get_all_records()
+        
+        # Mengambil record dengan header yang diharapkan untuk menghindari error duplikat kolom kosong
+        records = sheet.get_all_records(expected_headers=['Source Channel', 'Target Group ID', 'Topic ID', 'Status'])
         
         print(f"📊 [DEBUG] Berhasil membaca {len(records)} baris dari tab '{SHEET_TAB_NAME}'", flush=True)
         
         new_config = {}
         active_count = 0
         
-        for index, row in enumerate(records, start=2): # start=2 karena baris 1 adalah header
+        for index, row in enumerate(records, start=2):
             source = str(row.get("Source Channel", "")).strip()
             target = str(row.get("Target Group ID", "")).strip()
             topic_id = str(row.get("Topic ID", "")).strip()
@@ -52,7 +54,6 @@ def get_config_from_sheet():
             if status == "aktif":
                 if source and target:
                     active_count += 1
-                    # Bersihkan format target
                     target_final = int(target) if target.replace('-', '').isdigit() else target
                     
                     if source not in new_config:
@@ -63,10 +64,8 @@ def get_config_from_sheet():
                         "topic": int(topic_id) if topic_id.isdigit() else None
                     })
                     print(f"✅ [DEBUG] Baris {index}: Source {source} AKTIF -> Target {target} (Topic {topic_id})", flush=True)
-                else:
-                    print(f"⚠️ [DEBUG] Baris {index}: Status Aktif tapi Source/Target kosong!", flush=True)
-            
-        print(f"🚀 [DEBUG] Total sumber aktif yang akan dipantau: {active_count}", flush=True)
+        
+        print(f"🚀 [DEBUG] Total sumber aktif: {active_count}", flush=True)
         return new_config
     except Exception as e:
         print(f"✖ [ERROR] Gagal baca Sheet: {e}", flush=True)
@@ -76,10 +75,17 @@ async def main():
     global source_configs
     
     if not SESSION_STR:
-        print("✖ [ERROR] TELEGRAM_SESSION_BASE64 tidak ditemukan di .env!", flush=True)
+        print("✖ [ERROR] TELEGRAM_SESSION_BASE64 tidak ditemukan!", flush=True)
         return
 
-    client = TelegramClient(StringSession(SESSION_STR), API_ID, API_HASH)
+    # --- DECODE SESSION BASE64 ---
+    try:
+        decoded_session = base64.b64decode(SESSION_STR).decode('utf-8')
+    except Exception as e:
+        print(f"✖ [ERROR] Gagal decode SESSION_STR: {e}", flush=True)
+        return
+
+    client = TelegramClient(StringSession(decoded_session), API_ID, API_HASH)
     
     print("📡 [DEBUG] Menghubungkan ke Telegram...", flush=True)
     await client.start()
@@ -88,51 +94,36 @@ async def main():
     print(f"👤 [DEBUG] Login berhasil sebagai: {me.first_name} (@{me.username})", flush=True)
 
     async def update_sources():
-        """Background Task: Cek Sheet tiap 10 menit & Auto Join"""
         global source_configs
         while True:
-            print("\n🔄 [DEBUG] Memulai sinkronisasi rutin dengan Google Sheet...", flush=True)
+            print("\n🔄 [DEBUG] Sinkronisasi Google Sheet...", flush=True)
             source_configs = get_config_from_sheet()
-            
-            if not source_configs:
-                print("⚠️ [DEBUG] Tidak ada konfigurasi aktif. Pastikan kolom 'Status' diisi 'Aktif'.", flush=True)
             
             for source in source_configs.keys():
                 try:
                     if isinstance(source, str) and (source.startswith('@') or 't.me' in source):
-                        print(f"🔗 [DEBUG] Mencoba join ke: {source}", flush=True)
                         await client(functions.channels.JoinChannelRequest(channel=source))
-                except Exception as e:
-                    # Seringkali error karena sudah join, jadi kita diamkan saja
+                except:
                     pass 
-            
-            print("⏳ [DEBUG] Sinkronisasi selesai. Menunggu 10 menit untuk refresh berikutnya...\n", flush=True)
             await asyncio.sleep(600) 
 
-    # Jalankan background task
     asyncio.create_task(update_sources())
 
     @client.on(events.NewMessage())
     async def handler(event):
         chat = await event.get_chat()
-        
-        # Identifikasi sumber pesan untuk debug
         username = f"@{chat.username}" if getattr(chat, 'username', None) else None
         chat_id = str(event.chat_id)
-        chat_title = getattr(chat, 'title', 'Private Chat')
-        
-        # Cari target di config
-        targets = None
-        # Cek berdasarkan link lengkap, username, atau ID
         chat_link = f"https://t.me/{chat.username}" if username else None
         
-        for key in [username, chat_id, chat_link, f"https://t.me/{chat.username}"]:
+        targets = None
+        for key in [username, chat_id, chat_link]:
             if key and key in source_configs:
                 targets = source_configs[key]
                 break
             
         if targets:
-            print(f"📩 [NEW] Pesan masuk dari: {chat_title} ({username or chat_id})", flush=True)
+            print(f"📩 [NEW] Pesan dari: {getattr(chat, 'title', chat_id)}", flush=True)
             for t_config in targets:
                 try:
                     await client.forward_messages(
@@ -140,11 +131,10 @@ async def main():
                         event.message,
                         top_msg_id=t_config['topic']
                     )
-                    print(f"📤 [SUCCESS] Forwarded ke {t_config['target']} | Topic: {t_config['topic']}", flush=True)
                 except Exception as e:
-                    print(f"✖ [ERROR] Gagal forward: {e}", flush=True)
+                    print(f"✖ [ERROR] Forward gagal: {e}", flush=True)
 
-    print("🟢 Bot sedang berjalan. Menunggu pesan masuk...", flush=True)
+    print("🟢 Bot sedang berjalan...", flush=True)
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
