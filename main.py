@@ -18,10 +18,11 @@ GOOGLE_CREDS_BASE64 = os.getenv("GOOGLE_CREDENTIALS_BASE64")
 SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 SHEET_TAB_NAME = os.getenv("SHEET_TAB_NAME", "Research")
 
+# Global variable untuk menyimpan rute forward
 source_configs = {}
 
 def clean_source_name(name):
-    """Membersihkan nama source agar seragam menggunakan format @username"""
+    """Membersihkan nama source agar seragam menggunakan format @username atau ID"""
     name = str(name).strip()
     if not name: return ""
     if "t.me/" in name:
@@ -31,16 +32,19 @@ def clean_source_name(name):
     return name
 
 def get_config_from_sheet():
-    """Mengambil konfigurasi dari Google Sheet tab Research"""
+    """Mengambil data rute forward dari Google Sheet tab Research"""
     try:
+        # Decode Credentials Google
         creds_info = json.loads(base64.b64decode(GOOGLE_CREDS_BASE64).decode("utf-8"))
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
         client_gs = gspread.authorize(creds)
         
+        # Buka Sheet dan Tab
         sheet_full = client_gs.open_by_key(SHEET_ID)
         sheet = sheet_full.worksheet(SHEET_TAB_NAME)
-        # Hanya ambil kolom yang relevan untuk menghindari error duplikat kolom kosong
+        
+        # Ambil record dengan header spesifik
         records = sheet.get_all_records(expected_headers=['Source Channel', 'Target Group ID', 'Topic ID', 'Status'])
         
         new_config = {}
@@ -65,25 +69,28 @@ def get_config_from_sheet():
 
 async def main():
     global source_configs
+    
+    # Decode Base64 Session
     try:
-        # Decode Base64 Session agar bisa dibaca Telethon
         decoded_session = base64.b64decode(SESSION_STR).decode('utf-8')
     except Exception as e:
         print(f"✖ [ERROR] Gagal decode Session: {e}", flush=True)
         return
 
+    # Inisialisasi Client
     client = TelegramClient(StringSession(decoded_session), API_ID, API_HASH)
     await client.start()
     me = await client.get_me()
-    print(f"✅ [DEBUG] Akun {me.first_name} Berhasil Terhubung.", flush=True)
+    print(f"✅ [DEBUG] Akun {me.first_name} (@{me.username}) Berhasil Terhubung.", flush=True)
 
     async def update_sources():
+        """Looping sinkronisasi Google Sheet tiap 10 menit"""
         global source_configs
         while True:
             print("\n🔄 [DEBUG] Sinkronisasi Google Sheet...", flush=True)
             source_configs = get_config_from_sheet()
             print(f"📊 [DEBUG] Memantau {len(source_configs)} sumber aktif.", flush=True)
-            await asyncio.sleep(600) # Cek ulang setiap 10 menit
+            await asyncio.sleep(600) 
 
     asyncio.create_task(update_sources())
 
@@ -93,27 +100,27 @@ async def main():
         chat_id = str(event.chat_id)
         username = f"@{chat.username}" if getattr(chat, 'username', None) else None
         
-        # Cari target berdasarkan username atau ID
+        # Cari kecocokan rute
         targets = None
         for key in [username, chat_id]:
             if key and key in source_configs:
                 targets = source_configs[key]
-                print(f"📩 [MATCH] Pesan dari {key} -> Mencoba Forward...", flush=True)
+                print(f"📩 [MATCH] Pesan dari {key} -> Meneruskan...", flush=True)
                 break
         
         if targets:
             for t_config in targets:
                 try:
-                    # Menggunakan send_message dengan file=event.message agar support reply_to (Topic)
-                    # Ini adalah cara paling stabil di Telethon untuk masuk ke Topic ID
-                    await client.send_message(
+                    # forward_messages: Meneruskan pesan utuh (Caption + Forwarded Tag)
+                    # comment_to: Mengarahkan pesan ke Topic ID yang spesifik
+                    await client.forward_messages(
                         t_config['target'],
-                        file=event.message,
-                        reply_to=t_config['topic'] if t_config['topic'] else None
+                        event.message,
+                        comment_to=t_config['topic'] if t_config['topic'] else None
                     )
-                    print(f"✅ [SUCCESS] Berhasil dikirim ke Topic {t_config['topic']}", flush=True)
+                    print(f"✅ [SUCCESS] Forwarded ke Topic {t_config['topic']}", flush=True)
                 except Exception as e:
-                    print(f"✖ [ERROR] Gagal forward ke {t_config['target']}: {e}", flush=True)
+                    print(f"✖ [ERROR] Gagal meneruskan ke {t_config['target']}: {e}", flush=True)
 
     print("🟢 Bot Running... Menunggu pesan masuk.", flush=True)
     await client.run_until_disconnected()
