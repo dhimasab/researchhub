@@ -2,7 +2,7 @@ version: '3.8'
 services:
   bot-forwarder:
     build: .
-    container_name: tele-forwarder-v2
+    container_name: bridgenews
     restart: always
     environment:
       - API_ID=${API_ID}
@@ -12,3 +12,4 @@ services:
       - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID}
       - SHEET_TAB_NAME=${SHEET_TAB_NAME}
       - PYTHONUNBUFFERED=1
+
